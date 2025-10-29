@@ -1,0 +1,30 @@
+# CEX
+bybit
+okx
+htx|HTX
+bitget
+kucoinfutures|KuCoin Futures
+mexc
+---
+# DEX
+Lighter Perps|source=loris|loris=lighter_1_perp|interval_hours=8
+Aster Perps|source=loris|loris=aster_1_perp|interval_hours=8
+Hyperliquid|source=hyperliquid|loris=hyperliquid_1_perp
+Bluefin|source=loris|loris=bluefin_1_perp|interval_hours=8
+EdgeX Perps|source=loris|loris=edgex_1_perp|interval_hours=8
+Apex Protocol|source=apex
+# Reya Perps
+# GRVT Perps
+Paradex Perps|source=loris|loris=paradex_1_perp|interval_hours=8
+Pacifica|source=loris|loris=pacifica_1_perp|interval_hours=8
+# Orderly Perps
+Extended|source=loris|loris=extended_1_perp|interval_hours=8
+# Jupiter
+# Avantis
+Drift Trade|source=loris|loris=drift_1_perp|interval_hours=8
+Vest|source=loris|loris=vest_1_perp|interval_hours=8
+Variational|source=loris|loris=variational_1_perp|interval_hours=8
+Kuma|source=loris|loris=kuma_1_perp|interval_hours=8
+Hibachi|source=loris|loris=hibachi_1_perp|interval_hours=8
+Woofi Pro|source=loris|loris=woofipro_1_perp|interval_hours=8
+

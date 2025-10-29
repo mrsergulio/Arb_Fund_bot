@@ -1,0 +1,49 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Local data dumps and downloaded artifacts
+funding.json
+*history.json
+bybit.json
+okx.json
+htx.json
+bitget.json
+kucoin.json
+mexc.json
+protocols.json
+protocols2.json
+chunk.js
+main_app.js
+app_page.js
+historical_page.js
+historical.html
+api_docs.html
+api_docs_page.js
+defillama_derivatives.json
+loris_*.json
+bluefin_*.json
+btc_history.json
+935.js
+*.json
+*.rst
+avantis_*.md
+avantis_*.py
+apex_*.py
+http_public.py
+demo_*.py
+reya_openapi.yaml
+derivatives_page.html
+manifest.json
+kucoin_doc.html
+
+# Temporary scripts/logs
+*.log
+*.tmp
+
+# Misc
+.DS_Store
+Thumbs.db
+
+hyper.json
+*.docx
