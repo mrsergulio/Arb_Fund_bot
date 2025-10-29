@@ -341,7 +341,7 @@ class FundingWindowResult:
     entries: int
     window_days: float
     coverage_days: float
-    apy: float
+    apr: float
 
 
 @dataclasses.dataclass
@@ -363,7 +363,7 @@ def _estimate_interval_hours(entries: int, coverage_days: float, default_interva
     return default_interval_hours
 
 
-def _compute_apy(
+def _compute_apr(
     avg_rate: float,
     entries: int,
     coverage_days: float,
@@ -372,12 +372,7 @@ def _compute_apy(
 ) -> float:
     interval_hours = forced_interval_hours or _estimate_interval_hours(entries, coverage_days, default_interval_hours)
     periods_per_year = (24.0 / interval_hours) * 365.0
-    if periods_per_year <= 0:
-        return 0.0
-    base = 1.0 + avg_rate
-    if base <= 0.0:
-        return avg_rate * periods_per_year
-    return math.pow(base, periods_per_year) - 1.0
+    return avg_rate * periods_per_year
 
 
 def _day_sequence(max_days: int) -> List[int]:
@@ -410,13 +405,13 @@ def choose_window(
         if coverage >= 0.5 * required or days == 1 or len(subset) >= 2:
             avg = sum(rate for _, rate in subset) / len(subset)
             coverage_days = _ms_to_days(coverage)
-            apy = _compute_apy(avg, len(subset), coverage_days, default_interval_hours, forced_interval_hours)
+            apr = _compute_apr(avg, len(subset), coverage_days, default_interval_hours, forced_interval_hours)
             return FundingWindowResult(
                 average_rate=avg,
                 entries=len(subset),
                 window_days=days,
                 coverage_days=coverage_days,
-                apy=apy,
+                apr=apr,
             )
 
     # as a fallback, use the entire dataset
@@ -424,13 +419,13 @@ def choose_window(
     avg = sum(rate for _, rate in ordered) / len(ordered)
     fallback_days = max(coverage / DAY_MS, 0.0)
     coverage_days = _ms_to_days(coverage)
-    apy = _compute_apy(avg, len(ordered), coverage_days, default_interval_hours, forced_interval_hours)
+    apr = _compute_apr(avg, len(ordered), coverage_days, default_interval_hours, forced_interval_hours)
     return FundingWindowResult(
         average_rate=avg,
         entries=len(ordered),
         window_days=fallback_days,
         coverage_days=coverage_days,
-        apy=apy,
+        apr=apr,
     )
 
 
@@ -445,18 +440,13 @@ def _aggregate_hourly_to_eight_hour(data: Sequence[RatePoint]) -> List[RatePoint
         bucket_rates.append(rate)
         bucket_times.append(ts)
         if len(bucket_rates) == 8:
-            factor = math.prod((1.0 + r) for r in bucket_rates)
-            agg_rate = factor - 1.0
+            agg_rate = sum(bucket_rates)
             aggregated.append((bucket_times[-1], agg_rate))
             bucket_rates.clear()
             bucket_times.clear()
 
     if bucket_rates:
-        factor = math.prod((1.0 + r) for r in bucket_rates)
-        if factor <= 0.0:
-            agg_rate = sum(bucket_rates) / len(bucket_rates)
-        else:
-            agg_rate = math.pow(factor, 8.0 / len(bucket_rates)) - 1.0
+        agg_rate = sum(bucket_rates)
         aggregated.append((bucket_times[-1], agg_rate))
 
     return aggregated
@@ -887,7 +877,7 @@ def format_result(result: FundingResult, in_loris: Optional[bool] = None) -> str
             columns.append(f"{loris_col:^17}")
         return " | ".join(columns) + f" | {result.message}"
 
-    apy_pct = result.window.apy * 100.0
+    apy_pct = result.window.apr * 100.0
     columns = [
         f"{result.exchange:<18}",
         f"{apy_pct:>10.3f}",
@@ -944,7 +934,7 @@ def main() -> None:
     print(f"Attempting funding average using up to {target_days} day window.\n")
     print("Centralized Exchanges")
     print("-" * 76)
-    print(f"{'Exchange':<18} | {'Avg APY (%)':>10} | {'Days':>8} | Details")
+    print(f"{'Exchange':<18} | {'Avg APR (%)':>10} | {'Days':>8} | Details")
     print("-" * 76)
     for fetcher in cex_fetchers:
         result = fetcher.fetch(ticker, target_days)
@@ -967,7 +957,7 @@ def main() -> None:
     loris_metadata = _load_loris_exchange_metadata()
 
     print("-" * 96)
-    print(f"{'Protocol':<18} | {'Avg APY (%)':>10} | {'Days':>8} | {'is in loris.tools':^17} | Details")
+    print(f"{'Protocol':<18} | {'Avg APR (%)':>10} | {'Days':>8} | {'is in loris.tools':^17} | Details")
     print("-" * 96)
 
     for entry in dex_entries:
@@ -1027,3 +1017,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
