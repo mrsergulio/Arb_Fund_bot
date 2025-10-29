@@ -30,11 +30,37 @@ except ImportError:
 
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DAY_MS = 24 * 60 * 60 * 1000
 NOW_MS = int(time.time() * 1000)
+HTTP_TIMEOUT = 25
+REQUEST_RETRY_TOTAL = 3
+REQUEST_BACKOFF_FACTOR = 0.8
+LORIS_REQUEST_DELAY = 0.2
+
+
+def _build_http_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=REQUEST_RETRY_TOTAL,
+        read=REQUEST_RETRY_TOTAL,
+        connect=REQUEST_RETRY_TOTAL,
+        backoff_factor=REQUEST_BACKOFF_FACTOR,
+        status_forcelist=(408, 425, 429, 500, 502, 503, 504),
+        allowed_methods=("GET", "POST"),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+HTTP_SESSION = _build_http_session()
 
 DEFAULT_DEX_ORDER = [
     "Lighter",
@@ -208,7 +234,7 @@ def _load_loris_exchange_metadata() -> Dict[str, Dict[str, Optional[float]]]:
     if _loris_exchange_cache is not None:
         return _loris_exchange_cache
     try:
-        resp = requests.get("https://loris.tools/api/funding", timeout=15)
+        resp = HTTP_SESSION.get("https://loris.tools/api/funding", timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
         payload = resp.json()
         exchange_info = payload.get("exchanges", {}).get("exchange_names", [])
@@ -408,6 +434,34 @@ def choose_window(
     )
 
 
+def _aggregate_hourly_to_eight_hour(data: Sequence[RatePoint]) -> List[RatePoint]:
+    if not data:
+        return []
+    aggregated: List[RatePoint] = []
+    bucket_rates: List[float] = []
+    bucket_times: List[int] = []
+
+    for ts, rate in sorted(data, key=lambda x: x[0]):
+        bucket_rates.append(rate)
+        bucket_times.append(ts)
+        if len(bucket_rates) == 8:
+            factor = math.prod((1.0 + r) for r in bucket_rates)
+            agg_rate = factor - 1.0
+            aggregated.append((bucket_times[-1], agg_rate))
+            bucket_rates.clear()
+            bucket_times.clear()
+
+    if bucket_rates:
+        factor = math.prod((1.0 + r) for r in bucket_rates)
+        if factor <= 0.0:
+            agg_rate = sum(bucket_rates) / len(bucket_rates)
+        else:
+            agg_rate = math.pow(factor, 8.0 / len(bucket_rates)) - 1.0
+        aggregated.append((bucket_times[-1], agg_rate))
+
+    return aggregated
+
+
 class CCXTFundingFetcher:
     def __init__(
         self,
@@ -472,43 +526,77 @@ class CCXTFundingFetcher:
 
 class HyperliquidFetcher:
     BASE_URL = "https://api.hyperliquid.xyz/info"
+    PAGE_LIMIT = 500
+    MAX_PAGES = 24
 
     def fetch(self, ticker: str, days: int) -> FundingResult:
-        start_ts = NOW_MS - days * DAY_MS
-        payload = {"type": "fundingHistory", "coin": ticker.upper(), "startTime": start_ts}
-        try:
-            resp = requests.post(self.BASE_URL, json=payload, timeout=15)
-            resp.raise_for_status()
-        except requests.RequestException as exc:
-            return FundingResult("Hyperliquid", False, f"API error: {exc}")
-
-        try:
-            raw = resp.json()
-        except json.JSONDecodeError as exc:
-            return FundingResult("Hyperliquid", False, f"Invalid JSON: {exc}")
-
-        if not isinstance(raw, list):
-            return FundingResult("Hyperliquid", False, "Unexpected response format")
-
+        target_start = NOW_MS - days * DAY_MS
+        cursor = target_start
         data: List[RatePoint] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            ts = item.get("time")
-            rate = item.get("fundingRate")
+        last_ts_seen: Optional[int] = None
+        pages = 0
+
+        while cursor <= NOW_MS and pages < self.MAX_PAGES:
+            payload = {
+                "type": "fundingHistory",
+                "coin": ticker.upper(),
+                "startTime": cursor,
+            }
             try:
-                ts_int = int(ts)
-                rate_f = float(rate)
-            except (TypeError, ValueError):
-                continue
-            if ts_int <= NOW_MS:
+                resp = HTTP_SESSION.post(self.BASE_URL, json=payload, timeout=HTTP_TIMEOUT)
+                resp.raise_for_status()
+                raw = resp.json()
+            except requests.RequestException as exc:
+                return FundingResult("Hyperliquid", False, f"API error: {exc}")
+            except json.JSONDecodeError as exc:
+                return FundingResult("Hyperliquid", False, f"Invalid JSON: {exc}")
+
+            if not isinstance(raw, list) or not raw:
+                break
+
+            last_raw_ts: Optional[int] = None
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                ts = item.get("time")
+                rate = item.get("fundingRate")
+                try:
+                    ts_int = int(ts)
+                    rate_f = float(rate)
+                except (TypeError, ValueError):
+                    continue
+                last_raw_ts = ts_int
+                if ts_int > NOW_MS:
+                    continue
+                if ts_int < target_start:
+                    continue
+                if last_ts_seen is not None and ts_int <= last_ts_seen:
+                    continue
                 data.append((ts_int, rate_f))
+                last_ts_seen = ts_int
+
+            if last_raw_ts is None:
+                break
+
+            pages += 1
+            if last_ts_seen is not None and last_ts_seen >= NOW_MS:
+                break
+
+            cursor = last_raw_ts + 1
+            if len(raw) < self.PAGE_LIMIT:
+                break
 
         if not data:
             return FundingResult("Hyperliquid", False, "No funding data retrieved")
 
+        data.sort(key=lambda x: x[0])
+
+        aggregated = _aggregate_hourly_to_eight_hour(data)
+        if not aggregated:
+            return FundingResult("Hyperliquid", False, "No funding data retrieved")
+
         days_seq = _day_sequence(days)
-        window = choose_window(data, days_seq, default_interval_hours=1.0)
+        window = choose_window(aggregated, days_seq, default_interval_hours=8.0, forced_interval_hours=8.0)
         if window is None:
             return FundingResult("Hyperliquid", False, "Unable to compute average window")
         return FundingResult("Hyperliquid", True, "ok", window)
@@ -554,7 +642,7 @@ class LorisFundingFetcher:
                 "exchanges": self.exchange_id,
             }
             try:
-                resp = requests.get(self.BASE_URL, params=params, timeout=15)
+                resp = HTTP_SESSION.get(self.BASE_URL, params=params, timeout=HTTP_TIMEOUT)
                 resp.raise_for_status()
                 payload = resp.json()
             except requests.RequestException as exc:
@@ -579,6 +667,7 @@ class LorisFundingFetcher:
                 data_points[ts_ms] = rate_decimal
 
             fetch_start = fetch_end
+            time.sleep(LORIS_REQUEST_DELAY)
 
         if not data_points:
             return FundingResult(display_name, False, "No funding data available")
@@ -632,7 +721,7 @@ class ApexFundingFetcher:
             if page > 1:
                 params["page"] = page
             try:
-                resp = requests.get(self.BASE_URL, params=params, timeout=15)
+                resp = HTTP_SESSION.get(self.BASE_URL, params=params, timeout=HTTP_TIMEOUT)
                 resp.raise_for_status()
                 payload = resp.json()
             except requests.RequestException as exc:
@@ -703,7 +792,7 @@ def build_dex_entries(
     else:
         remote_names: List[str] = []
         try:
-            resp = requests.get("https://api.llama.fi/protocols", timeout=30)
+            resp = HTTP_SESSION.get("https://api.llama.fi/protocols", timeout=max(HTTP_TIMEOUT, 30))
             resp.raise_for_status()
             payload = resp.json()
             if isinstance(payload, list):

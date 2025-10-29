@@ -61,22 +61,21 @@ py -3 funding_analysis.py BTC 180
 - `ticker`: base asset (case-insensitive).
 - `days` (optional): target window in days. Defaults to 180. Values are clamped
   between 1 and 730.
-
 The script prints two tables:
-1. **Centralized Exchanges** — APY, window length, and execution details for
+1. **Centralized Exchanges** - APY, window length, and execution details for
    each configured CEX.
-2. **DEX** — Same metrics plus an `is in loris.tools` flag indicating Loris
+2. **DEX** - Same metrics plus an is in loris.tools flag indicating Loris
    coverage.
 
 If an exchange lacks data for the requested window, the tool steps down through
-smaller windows (180 → 150 → … → 30 → 1). Failures are reported with descriptive
-messages in the output table.
+smaller windows (180 -> 150 -> ... -> 30 -> 1). Failures are reported with
+descriptive messages in the output table.
 
 ## Notes
 - Install `ccxt` before running the script; otherwise it will exit with an
   informative message.
 - Some exchanges (Apex Protocol, Avantis, Reya, Orderly, GRVT, etc.) may still
-  be marked as “No fetcher configured” pending dedicated integrations.
+  be marked as "No fetcher configured" pending dedicated integrations.
 - Funding APY is derived from the compounded average of the normalized funding
   rate over the selected window; ensure you understand the cadence (hourly
   versus 8-hourly) when comparing with external dashboards.
